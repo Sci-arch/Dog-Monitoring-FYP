@@ -43,11 +43,15 @@ async def analyze_emotion(
 ):
     physio_risk = calculate_physio_risk(bpm, temp, action)
     audio_risk = 0.0 
-    
-    if audio_file is not None and audio_model is not None:
+if audio_file is not None and audio_model is not None:
         try:
-            # 🌟 核心优化 1：直接把 ESP32 发来的数据读到内存里，不保存在硬盘上！
             audio_bytes = await audio_file.read()
+            
+            # 👇 加上这三行！把 ESP32 发来的声音保存在本地文件夹！
+            with open("debug_record.wav", "wb") as f:
+                f.write(audio_bytes)
+            print("💾 音频已保存为 debug_record.wav，快去听听看！")
+            
             audio_io = io.BytesIO(audio_bytes)
             
             # librosa 可以直接从内存流 (io) 中读取音频
