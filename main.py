@@ -4,18 +4,19 @@ import gc
 import numpy as np
 import librosa
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import FileResponse  # 🌟 新增：用来下载文件
 from tensorflow.keras.models import load_model
 from typing import Optional
 import tensorflow as tf
 
-# 1. 限制 TensorFlow 线程，防止它过度占用 CPU 导致崩溃
+# 1. 限制 TensorFlow 线程
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.config.threading.set_intra_op_parallelism_threads(1)
 
-app = FastAPI(title=" FYP2 Multimodal Pet Emotion API")
+app = FastAPI(title="FYP2 Multimodal Pet Emotion API")
 latest_pet_status = {"diagnosed_emotion": "Waiting..."}
 
-# 2. 全局只加载一次模型，绝对不要在每次请求时重新加载
+# 2. 全局只加载一次模型
 MODEL_PATH = "Cloud_Audio_CRNN_Advance.h5" 
 
 print("🚀 正在唤醒云端听觉专家...")
@@ -24,7 +25,7 @@ if os.path.exists(MODEL_PATH):
     print("✅ 左脑模型加载成功！")
 else:
     audio_model = None
-    print("❌ 找不到 .h5 模型，请确认它和 main.py 在同一个文件夹！")
+    print("❌ 找不到 .h5 模型！")
 
 def calculate_physio_risk(bpm: int, temp: float, action: int) -> float:
     risk = 0.0
@@ -43,18 +44,18 @@ async def analyze_emotion(
 ):
     physio_risk = calculate_physio_risk(bpm, temp, action)
     audio_risk = 0.0 
-if audio_file is not None and audio_model is not None:
+    
+    # ✅ 修复了缩进！
+    if audio_file is not None and audio_model is not None:
         try:
             audio_bytes = await audio_file.read()
             
-            # 👇 加上这三行！把 ESP32 发来的声音保存在本地文件夹！
+            # 👇 保存在 Render 云端本地
             with open("debug_record.wav", "wb") as f:
                 f.write(audio_bytes)
-            print("💾 音频已保存为 debug_record.wav，快去听听看！")
+            print("💾 音频已保存为 debug_record.wav")
             
             audio_io = io.BytesIO(audio_bytes)
-            
-            # librosa 可以直接从内存流 (io) 中读取音频
             y, sr = librosa.load(audio_io, sr=16000)
             
             y_pre = np.append(y[0], y[1:] - 0.97 * y[:-1])
@@ -68,18 +69,15 @@ if audio_file is not None and audio_model is not None:
             
             X_input = np.expand_dims(S_dB, axis=[0, -1])
             
-            # 🌟 核心优化 2：用 audio_model(X) 代替 .predict()，防止 TF 内存泄漏
             audio_prediction = audio_model(X_input, training=False)
             audio_risk = float(audio_prediction[0][0])
             
-            # 🌟 核心优化 3：极速垃圾回收 (Garbage Collection)。用完的数据彻底销毁，释放给 Render
             del audio_bytes, audio_io, y, y_pre, S, S_dB, X_input, audio_prediction
             gc.collect()
                 
         except Exception as e:
             print(f"❌ 音频处理出错: {e}")
     
-    # --- Y-Path 大融合 ---
     final_fusion_score = (0.6 * audio_risk) + (0.4 * physio_risk)
     
     if final_fusion_score > 0.8:
@@ -104,7 +102,6 @@ if audio_file is not None and audio_model is not None:
     return {
         "status": "success",
         "inputs_received": {"bpm": bpm, "temp": temp, "action": action},
-        "audio_file_provided": audio_file is not None,
         "audio_risk_prob": round(audio_risk, 3),
         "physio_risk_prob": round(physio_risk, 3),
         "final_fusion_score": round(final_fusion_score, 3),
@@ -115,8 +112,14 @@ if audio_file is not None and audio_model is not None:
 async def get_latest_emotion():
     return latest_pet_status
 
+# 🌟 超级黑科技接口：用来下载最新的录音！
+@app.get("/download_audio")
+async def download_audio():
+    if os.path.exists("debug_record.wav"):
+        return FileResponse("debug_record.wav", media_type="audio/wav")
+    return {"error": "No audio recorded yet!"}
+
 if __name__ == "__main__":
     import uvicorn
-    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
