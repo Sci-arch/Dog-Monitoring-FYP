@@ -6,19 +6,19 @@ import glob
 import numpy as np
 import librosa
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from tensorflow.keras.models import load_model
 from typing import Optional
 import tensorflow as tf
 
-# 1. Limit TensorFlow threads
+# 1. 限制 TensorFlow 线程，防止卡死
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.config.threading.set_intra_op_parallelism_threads(1)
 
 app = FastAPI(title="FYP2 Multimodal Pet Emotion API")
 latest_pet_status = {"diagnosed_emotion": "Waiting..."}
 
-# 2. Load model once
+# 2. 全局加载模型
 MODEL_PATH = "Cloud_Audio_CRNN_Advance.h5"
 
 print("🚀 Loading model...")
@@ -38,13 +38,11 @@ def calculate_physio_risk(bpm: int, temp: float, action: int) -> float:
     return min(risk, 1.0)
 
 def cleanup_old_recordings(keep_last=10):
-    """Delete old recordings, keep only latest N files"""
     files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime)
     if len(files) > keep_last:
         for old_file in files[:-keep_last]:
             try:
                 os.remove(old_file)
-                print(f"🗑️ Deleted old: {old_file}")
             except:
                 pass
 
@@ -63,17 +61,14 @@ async def analyze_emotion(
         try:
             audio_bytes = await audio_file.read()
             
-            # Save with unique timestamp
             timestamp = int(time.time() * 1000)
             saved_filename = f"debug_record_{timestamp}.wav"
             with open(saved_filename, "wb") as f:
                 f.write(audio_bytes)
-            print(f"💾 Audio saved: {saved_filename}")
             
-            # Auto-cleanup (keep last 10)
             cleanup_old_recordings(keep_last=10)
             
-            # Process audio
+            # 提取音频
             audio_io = io.BytesIO(audio_bytes)
             y, sr = librosa.load(audio_io, sr=16000)
             
@@ -88,9 +83,24 @@ async def analyze_emotion(
             
             X_input = np.expand_dims(S_dB, axis=[0, -1])
             
+            # 🌟 1. 让 AI 模型先进行预测
             audio_prediction = audio_model(X_input, training=False)
-            audio_risk = float(audio_prediction[0][0])
+            raw_ai_risk = float(audio_prediction[0][0])
             
+            # 🌟 2. 获取真实的音量大小
+            volume = np.max(np.abs(y)) 
+            
+            # 🌟 3. 混合智能校验逻辑 (Hybrid Logic)
+            if volume < 0.05:
+                # 环境极其安静，即使 AI 乱猜，我们也强制纠正为放松状态
+                audio_risk = 0.10 
+            elif volume > 0.4 and 0.45 < raw_ai_risk < 0.60:
+                # 声音极大(狗叫)，且 AI 正在犹豫(0.54左右)，我们帮 AI 肯定这个结果
+                audio_risk = 0.85
+            else:
+                # 其他正常情况，完全信任 AI 模型自己的判断！
+                audio_risk = raw_ai_risk
+
             del audio_bytes, audio_io, y, y_pre, S, S_dB, X_input, audio_prediction
             gc.collect()
                 
@@ -133,16 +143,11 @@ async def analyze_emotion(
 async def get_latest_emotion():
     return latest_pet_status
 
-# 📋 List all recordings
 @app.get("/list_audio")
 async def list_audio():
     files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
-    return {
-        "total": len(files),
-        "recordings": files
-    }
+    return {"total": len(files), "recordings": files}
 
-# ⬇️ Download latest recording (quick access)
 @app.get("/download_latest")
 async def download_latest():
     files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
@@ -150,19 +155,15 @@ async def download_latest():
         return FileResponse(files[0], media_type="audio/wav")
     return JSONResponse({"error": "No recordings yet"}, status_code=404)
 
-# ⬇️ Download specific recording by filename
 @app.get("/download_audio/{filename}")
 async def download_specific(filename: str):
     if os.path.exists(filename) and filename.endswith(".wav"):
         return FileResponse(filename, media_type="audio/wav")
     return JSONResponse({"error": "File not found"}, status_code=404)
-from fastapi.responses import HTMLResponse
 
-# 🌟 终极黑科技：直接在浏览器里播放所有录音！
 @app.get("/", response_class=HTMLResponse)
 async def web_player():
     files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
-    
     html_content = """
     <html>
     <head>
@@ -176,7 +177,6 @@ async def web_player():
     <body>
         <h2>🐕 FYP Multimodal Audio Logs (Latest 10)</h2>
     """
-    
     if not files:
         html_content += "<p>No recordings found yet. Start the ESP32!</p>"
     else:
@@ -187,7 +187,6 @@ async def web_player():
                 <audio controls src="/download_audio/{f}"></audio>
             </div>
             """
-            
     html_content += "</body></html>"
     return html_content
 
