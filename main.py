@@ -1,31 +1,33 @@
 import os
 import io
 import gc
+import time
+import glob
 import numpy as np
 import librosa
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse  # 🌟 新增：用来下载文件
+from fastapi.responses import FileResponse, JSONResponse
 from tensorflow.keras.models import load_model
 from typing import Optional
 import tensorflow as tf
 
-# 1. 限制 TensorFlow 线程
+# 1. Limit TensorFlow threads
 tf.config.threading.set_inter_op_parallelism_threads(1)
 tf.config.threading.set_intra_op_parallelism_threads(1)
 
 app = FastAPI(title="FYP2 Multimodal Pet Emotion API")
 latest_pet_status = {"diagnosed_emotion": "Waiting..."}
 
-# 2. 全局只加载一次模型
-MODEL_PATH = "Cloud_Audio_CRNN_Advance.h5" 
+# 2. Load model once
+MODEL_PATH = "Cloud_Audio_CRNN_Advance.h5"
 
-print("🚀 正在唤醒云端听觉专家...")
+print("🚀 Loading model...")
 if os.path.exists(MODEL_PATH):
     audio_model = load_model(MODEL_PATH)
-    print("✅ 左脑模型加载成功！")
+    print("✅ Model loaded!")
 else:
     audio_model = None
-    print("❌ 找不到 .h5 模型！")
+    print("❌ Model not found!")
 
 def calculate_physio_risk(bpm: int, temp: float, action: int) -> float:
     risk = 0.0
@@ -35,6 +37,17 @@ def calculate_physio_risk(bpm: int, temp: float, action: int) -> float:
     if action in [1, 2]: risk += 0.2
     return min(risk, 1.0)
 
+def cleanup_old_recordings(keep_last=10):
+    """Delete old recordings, keep only latest N files"""
+    files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime)
+    if len(files) > keep_last:
+        for old_file in files[:-keep_last]:
+            try:
+                os.remove(old_file)
+                print(f"🗑️ Deleted old: {old_file}")
+            except:
+                pass
+
 @app.post("/analyze_emotion")
 async def analyze_emotion(
     bpm: int = Form(...),
@@ -43,18 +56,24 @@ async def analyze_emotion(
     audio_file: Optional[UploadFile] = File(None)
 ):
     physio_risk = calculate_physio_risk(bpm, temp, action)
-    audio_risk = 0.0 
+    audio_risk = 0.0
+    saved_filename = None
     
-    # ✅ 修复了缩进！
     if audio_file is not None and audio_model is not None:
         try:
             audio_bytes = await audio_file.read()
             
-            # 👇 保存在 Render 云端本地
-            with open("debug_record.wav", "wb") as f:
+            # Save with unique timestamp
+            timestamp = int(time.time() * 1000)
+            saved_filename = f"debug_record_{timestamp}.wav"
+            with open(saved_filename, "wb") as f:
                 f.write(audio_bytes)
-            print("💾 音频已保存为 debug_record.wav")
+            print(f"💾 Audio saved: {saved_filename}")
             
+            # Auto-cleanup (keep last 10)
+            cleanup_old_recordings(keep_last=10)
+            
+            # Process audio
             audio_io = io.BytesIO(audio_bytes)
             y, sr = librosa.load(audio_io, sr=16000)
             
@@ -76,7 +95,7 @@ async def analyze_emotion(
             gc.collect()
                 
         except Exception as e:
-            print(f"❌ 音频处理出错: {e}")
+            print(f"❌ Audio processing error: {e}")
     
     final_fusion_score = (0.6 * audio_risk) + (0.4 * physio_risk)
     
@@ -96,7 +115,8 @@ async def analyze_emotion(
         "status": "success",
         "diagnosed_emotion": emotion,
         "bpm": bpm,
-        "temp": temp
+        "temp": temp,
+        "last_audio_file": saved_filename
     }
     
     return {
@@ -105,19 +125,37 @@ async def analyze_emotion(
         "audio_risk_prob": round(audio_risk, 3),
         "physio_risk_prob": round(physio_risk, 3),
         "final_fusion_score": round(final_fusion_score, 3),
-        "diagnosed_emotion": emotion
+        "diagnosed_emotion": emotion,
+        "saved_audio": saved_filename
     }
 
 @app.get("/latest_emotion")
 async def get_latest_emotion():
     return latest_pet_status
 
-# 🌟 超级黑科技接口：用来下载最新的录音！
-@app.get("/download_audio")
-async def download_audio():
-    if os.path.exists("debug_record.wav"):
-        return FileResponse("debug_record.wav", media_type="audio/wav")
-    return {"error": "No audio recorded yet!"}
+# 📋 List all recordings
+@app.get("/list_audio")
+async def list_audio():
+    files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
+    return {
+        "total": len(files),
+        "recordings": files
+    }
+
+# ⬇️ Download latest recording (quick access)
+@app.get("/download_latest")
+async def download_latest():
+    files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
+    if files:
+        return FileResponse(files[0], media_type="audio/wav")
+    return JSONResponse({"error": "No recordings yet"}, status_code=404)
+
+# ⬇️ Download specific recording by filename
+@app.get("/download_audio/{filename}")
+async def download_specific(filename: str):
+    if os.path.exists(filename) and filename.endswith(".wav"):
+        return FileResponse(filename, media_type="audio/wav")
+    return JSONResponse({"error": "File not found"}, status_code=404)
 
 if __name__ == "__main__":
     import uvicorn
