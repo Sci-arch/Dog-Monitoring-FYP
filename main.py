@@ -156,6 +156,40 @@ async def download_specific(filename: str):
     if os.path.exists(filename) and filename.endswith(".wav"):
         return FileResponse(filename, media_type="audio/wav")
     return JSONResponse({"error": "File not found"}, status_code=404)
+from fastapi.responses import HTMLResponse
+
+# 🌟 终极黑科技：直接在浏览器里播放所有录音！
+@app.get("/", response_class=HTMLResponse)
+async def web_player():
+    files = sorted(glob.glob("debug_record_*.wav"), key=os.path.getmtime, reverse=True)
+    
+    html_content = """
+    <html>
+    <head>
+        <title>Roc's FYP Audio Player</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background-color: #1e1e1e; color: #fff; }
+            .record-box { background: #2d2d2d; padding: 15px; margin-bottom: 15px; border-radius: 8px; }
+            audio { width: 100%; margin-top: 10px; }
+        </style>
+    </head>
+    <body>
+        <h2>🐕 FYP Multimodal Audio Logs (Latest 10)</h2>
+    """
+    
+    if not files:
+        html_content += "<p>No recordings found yet. Start the ESP32!</p>"
+    else:
+        for f in files:
+            html_content += f"""
+            <div class="record-box">
+                <strong>{f}</strong>
+                <audio controls src="/download_audio/{f}"></audio>
+            </div>
+            """
+            
+    html_content += "</body></html>"
+    return html_content
 
 if __name__ == "__main__":
     import uvicorn
