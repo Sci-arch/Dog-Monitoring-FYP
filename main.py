@@ -86,21 +86,21 @@ async def analyze_emotion(
             # 🌟 1. 让 AI 模型先进行预测
             audio_prediction = audio_model(X_input, training=False)
             raw_ai_risk = float(audio_prediction[0][0])
-            
-            # 🌟 2. 获取真实的音量大小
-            volume = np.max(np.abs(y)) 
-            
-            # 🌟 3. 混合智能校验逻辑 (Hybrid Logic)
-            if volume < 0.05:
-                # 环境极其安静，即使 AI 乱猜，我们也强制纠正为放松状态
-                audio_risk = 0.10 
-            elif volume > 0.4 and 0.45 < raw_ai_risk < 0.60:
-                # 声音极大(狗叫)，且 AI 正在犹豫(0.54左右)，我们帮 AI 肯定这个结果
-                audio_risk = 0.85
-            else:
-                # 其他正常情况，完全信任 AI 模型自己的判断！
-                audio_risk = raw_ai_risk
 
+            volume = float(np.max(np.abs(y)))
+
+            print(f"🎧 Raw CRNN Audio Risk: {raw_ai_risk:.4f}")
+            print(f"🔊 Audio Volume: {volume:.4f}")
+
+            # Hybrid fallback
+            if volume < 0.05:
+                audio_risk = 0.10
+
+            elif volume > 0.4 and 0.45 < raw_ai_risk < 0.60:
+                audio_risk = 0.85
+
+            else:
+                audio_risk = raw_ai_risk
             del audio_bytes, audio_io, y, y_pre, S, S_dB, X_input, audio_prediction
             gc.collect()
                 
