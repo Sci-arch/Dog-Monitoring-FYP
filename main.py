@@ -56,6 +56,11 @@ async def analyze_emotion(
     physio_risk = calculate_physio_risk(bpm, temp, action)
     audio_risk = 0.0
     saved_filename = None
+    raw_ai_risk = None
+    peak_volume = None
+    rms_volume = None
+    decision_source = "NO_AUDIO"
+    fallback_used = False
     
     if audio_file is not None and audio_model is not None:
         try:
@@ -83,24 +88,49 @@ async def analyze_emotion(
             
             X_input = np.expand_dims(S_dB, axis=[0, -1])
             
-            # 🌟 1. 让 AI 模型先进行预测
+            # ==========================================================
+            # AUDIO AI + SIGNAL DIAGNOSTICS
+            # ==========================================================
             audio_prediction = audio_model(X_input, training=False)
             raw_ai_risk = float(audio_prediction[0][0])
 
-            volume = float(np.max(np.abs(y)))
+            peak_volume = float(np.max(np.abs(y)))
+            rms_volume = float(np.sqrt(np.mean(np.square(y))))
 
-            print(f"🎧 Raw CRNN Audio Risk: {raw_ai_risk:.4f}")
-            print(f"🔊 Audio Volume: {volume:.4f}")
+            # ==========================================================
+            # FINAL HYBRID AUDIO DECISION
+            # CRNN is primary. Signal metrics are only conservative
+            # fallbacks for silence or strong/uncertain input.
+            # ==========================================================
+            fallback_used = False
 
-            # Hybrid fallback
-            if volume < 0.05:
+            if rms_volume < 0.02 and peak_volume < 0.05:
                 audio_risk = 0.10
+                decision_source = "SILENCE_FALLBACK"
+                fallback_used = True
 
-            elif volume > 0.4 and 0.45 < raw_ai_risk < 0.60:
+            elif (
+                0.45 <= raw_ai_risk <= 0.60
+                and peak_volume > 0.45
+                and rms_volume > 0.08
+            ):
                 audio_risk = 0.85
+                decision_source = "LOUD_SIGNAL_FALLBACK"
+                fallback_used = True
 
             else:
                 audio_risk = raw_ai_risk
+                decision_source = "CRNN"
+
+            print("========== AUDIO AI DEBUG ==========")
+            print(f"Raw CRNN Risk   : {raw_ai_risk:.4f}")
+            print(f"Peak Volume     : {peak_volume:.4f}")
+            print(f"RMS Volume      : {rms_volume:.4f}")
+            print(f"Final Audio Risk: {audio_risk:.4f}")
+            print(f"Decision Source : {decision_source}")
+            print(f"Fallback Used   : {fallback_used}")
+            print("====================================")
+
             del audio_bytes, audio_io, y, y_pre, S, S_dB, X_input, audio_prediction
             gc.collect()
                 
@@ -126,13 +156,27 @@ async def analyze_emotion(
         "diagnosed_emotion": emotion,
         "bpm": bpm,
         "temp": temp,
+        "action": action,
+        "raw_crnn_audio_risk": round(raw_ai_risk, 4) if raw_ai_risk is not None else None,
+        "peak_volume": round(peak_volume, 4) if peak_volume is not None else None,
+        "rms_volume": round(rms_volume, 4) if rms_volume is not None else None,
+        "audio_risk": round(audio_risk, 4),
+        "decision_source": decision_source,
+        "fallback_used": fallback_used,
         "last_audio_file": saved_filename
     }
-    
+
     return {
         "status": "success",
         "inputs_received": {"bpm": bpm, "temp": temp, "action": action},
-        "audio_risk_prob": round(audio_risk, 3),
+        "audio_diagnostics": {
+            "raw_crnn_risk": round(raw_ai_risk, 4) if raw_ai_risk is not None else None,
+            "peak_volume": round(peak_volume, 4) if peak_volume is not None else None,
+            "rms_volume": round(rms_volume, 4) if rms_volume is not None else None,
+            "final_audio_risk": round(audio_risk, 4),
+            "decision_source": decision_source,
+            "fallback_used": fallback_used
+        },
         "physio_risk_prob": round(physio_risk, 3),
         "final_fusion_score": round(final_fusion_score, 3),
         "diagnosed_emotion": emotion,
