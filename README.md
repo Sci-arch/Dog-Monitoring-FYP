@@ -15,7 +15,7 @@ By integrating **TinyML** for low-latency physical anomaly detection on the edge
 
 | Module | Description | Directory |
 | :--- | :--- | :--- |
-| **⚙️ Edge Firmware** | ESP32 C++ code for sensor polling (I2C, I2S), TinyML inference, and MQTT. | [`/ESP32_Code`](./ESP32_Code) |
+| **⚙️ Edge Firmware** | ESP32 C++ code for sensor polling (I2C, I2S), TinyML inference, and HTTPS Multipart Data Transfer. | [`/ESP32_Code`](./ESP32_Code) |
 | **📱 Mobile App** | Android Kotlin application for UI visualization (Live graphs, Alert History). | [`/Android_App`](./Android_App) |
 | **📊 Datasets Info** | Links to Kaggle and INAOE acoustic datasets used for training. | [`/Datasets`](./Datasets) |
 | **☁️ Cloud Backend** | FastAPI server files hosted on Render. (Root directory). | `main.py` / `requirements.txt` |
